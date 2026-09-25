@@ -1,0 +1,23 @@
+ARG JAVA_VERSION={{.versions.java}}
+FROM {{.builderImage}} AS build
+
+WORKDIR /app
+COPY . .
+RUN {{.buildCmd}}
+
+# Pick the runnable jar (skip plain/sources/javadoc/original jars)
+RUN find {{.jarDir}} -maxdepth 1 -name '*.jar' \
+      ! -name '*-plain.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name 'original-*' \
+      | head -n 1 | xargs -I{} cp {} /app/app.jar
+
+FROM docker.io/library/eclipse-temurin:${JAVA_VERSION}-jre
+
+RUN useradd --system --no-create-home app
+
+COPY --from=build /app/app.jar /app/app.jar
+
+{{env .env}}
+USER app
+
+EXPOSE {{.port}}
+CMD {{exec .cmd}}

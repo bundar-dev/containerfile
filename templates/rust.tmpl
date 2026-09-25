@@ -1,0 +1,32 @@
+ARG RUST_VERSION={{.versions.rust}}
+FROM docker.io/library/rust:${RUST_VERSION}-slim-bookworm AS chef
+{{apt .buildPackages}}
+RUN cargo install cargo-chef --locked
+WORKDIR /app
+
+# Compute a dependency recipe
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
+# Build dependencies only; this layer is cached until dependencies change
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+COPY . .
+RUN cargo build --release --bin {{.bin}}
+
+FROM docker.io/library/debian:bookworm-slim
+
+{{apt .runtimePackages}}
+
+RUN useradd --system --no-create-home app
+
+COPY --from=build /app/target/release/{{.bin}} /usr/local/bin/{{.bin}}
+
+{{env .env}}
+USER app
+
+EXPOSE {{.port}}
+CMD {{exec .cmd}}

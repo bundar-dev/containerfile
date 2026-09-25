@@ -1,0 +1,79 @@
+ARG PYTHON_VERSION={{.versions.python}}
+FROM docker.io/library/python:${PYTHON_VERSION}-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Throw-away build stage: install dependencies into /app/.venv
+FROM base AS build
+
+{{apt .buildPackages}}
+
+{{if eq .packageManager "uv"}}
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY . .
+RUN uv sync --frozen --no-dev
+{{else if eq .packageManager "poetry"}}
+RUN pip install --no-cache-dir poetry
+ENV POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_NO_INTERACTION=1
+
+COPY pyproject.toml poetry.lock* ./
+RUN poetry install --only main --no-root
+
+COPY . .
+{{else if eq .packageManager "pipenv"}}
+RUN pip install --no-cache-dir pipenv
+ENV PIPENV_VENV_IN_PROJECT=1
+
+COPY Pipfile Pipfile.lock* ./
+RUN pipenv install{{if .pipfileLock}} --deploy{{end}}
+
+COPY . .
+{{else if eq .packageManager "pip"}}
+RUN python -m venv .venv
+COPY requirements.txt ./
+RUN .venv/bin/pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+{{else}}
+RUN python -m venv .venv
+COPY . .
+RUN .venv/bin/pip install --no-cache-dir .
+{{end}}
+{{if .collectstatic}}
+
+# Collect static files
+RUN .venv/bin/python manage.py collectstatic --noinput
+{{end}}
+
+# Final stage for app image
+FROM base
+
+{{apt .runtimePackages}}
+
+RUN groupadd --system app && useradd --system --gid app --home-dir /app app
+
+COPY --from=build --chown=app:app /app /app
+
+ENV PATH="/app/.venv/bin:$PATH"
+{{env .env}}
+
+USER app
+{{if .port}}
+
+EXPOSE {{.port}}
+{{end}}
+{{if .cmd}}
+
+CMD {{exec .cmd}}
+{{end}}

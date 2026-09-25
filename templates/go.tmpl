@@ -1,0 +1,29 @@
+ARG GO_VERSION={{.versions.go}}
+FROM docker.io/library/golang:${GO_VERSION}-bookworm AS build
+
+WORKDIR /src
+
+# Download dependencies first for better layer caching
+{{if .goSum}}
+COPY go.mod go.sum ./
+{{else}}
+COPY go.mod ./
+{{end}}
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED={{if .cgo}}1{{else}}0{{end}} go build -trimpath -ldflags="-s -w" -o /out/server {{.package}}
+
+{{if .cgo}}
+FROM gcr.io/distroless/base-debian12:nonroot
+{{else}}
+FROM gcr.io/distroless/static-debian12:nonroot
+{{end}}
+
+COPY --from=build /out/server /app/server
+
+{{env .env}}
+USER nonroot:nonroot
+
+EXPOSE {{.port}}
+CMD {{exec .cmd}}

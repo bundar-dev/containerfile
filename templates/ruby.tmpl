@@ -1,0 +1,88 @@
+{{if .js}}
+# Node.js is only used at build time for JavaScript/CSS bundling
+ARG NODE_VERSION={{.nodeVersion}}
+FROM docker.io/library/node:${NODE_VERSION}-slim AS node
+
+{{end}}
+ARG RUBY_VERSION={{.versions.ruby}}
+FROM docker.io/library/ruby:${RUBY_VERSION}-slim AS base
+
+WORKDIR {{.workdir}}
+
+{{apt .runtimePackages}}
+
+ENV BUNDLE_DEPLOYMENT="1" \
+    BUNDLE_PATH="/usr/local/bundle" \
+    BUNDLE_WITHOUT="development:test"{{if .rails}} \
+    RAILS_ENV="production"{{end}}
+
+# Throw-away build stage to reduce size of final image
+FROM base AS build
+
+{{apt .buildPackages}}
+{{if .js}}
+
+# Install Node.js for JavaScript/CSS bundling
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+{{if .js.Setup}}
+RUN {{.js.Setup}}
+{{end}}
+{{end}}
+
+# Install application gems
+COPY Gemfile Gemfile.lock* ./
+RUN bundle install && \
+    rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git{{if .bootsnap}} && \
+    bundle exec bootsnap precompile --gemfile{{end}}
+{{if .js}}
+
+# Install node modules
+COPY {{.js.Files}} ./
+RUN {{.js.Install}}
+{{end}}
+
+# Copy application code
+COPY . .
+{{if .bootsnap}}
+
+# Precompile bootsnap code for faster boot times
+RUN bundle exec bootsnap precompile app/ lib/
+{{end}}
+{{if .assets}}
+
+# Precompiling assets for production without requiring secret RAILS_MASTER_KEY
+RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
+{{end}}
+{{if .js}}
+
+RUN rm -rf node_modules
+{{end}}
+
+# Final stage for app image
+FROM base
+
+# Run as a non-root user
+RUN groupadd --system --gid 1000 app && \
+    useradd app --uid 1000 --gid 1000 --create-home --shell /bin/bash
+
+# Copy built artifacts: gems, application
+COPY --from=build "${BUNDLE_PATH}" "${BUNDLE_PATH}"
+COPY --from=build --chown=app:app {{.workdir}} {{.workdir}}
+
+USER 1000:1000
+{{env .env}}
+{{if .entrypoint}}
+
+# Entrypoint prepares the database.
+ENTRYPOINT {{exec .entrypoint}}
+{{end}}
+{{if .port}}
+
+EXPOSE {{.port}}
+{{end}}
+{{if .cmd}}
+CMD {{exec .cmd}}
+{{end}}

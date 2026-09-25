@@ -1,0 +1,9 @@
+# Binaries from `go build -o bin/...` and goreleaser.
+/bin/
+/dist/
+
+# Test output.
+*.test
+coverage.out
+
+.DS_Store

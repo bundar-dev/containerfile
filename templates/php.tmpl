@@ -1,0 +1,59 @@
+ARG PHP_VERSION={{.versions.php}}
+{{if .composer}}
+
+# Install PHP dependencies
+FROM docker.io/library/composer:2 AS vendor
+WORKDIR /app
+COPY composer.json composer.lock* ./
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction --ignore-platform-reqs
+COPY . .
+RUN composer dump-autoload --optimize --no-dev --no-scripts
+{{end}}
+{{if .assets}}
+
+# Build frontend assets
+FROM docker.io/library/node:lts-slim AS assets
+WORKDIR /app
+COPY package*.json ./
+RUN {{.assetsInstall}}
+COPY . .
+{{if .composer}}
+COPY --from=vendor /app/vendor ./vendor
+{{end}}
+RUN npm run build
+{{end}}
+
+FROM docker.io/library/php:${PHP_VERSION}-apache
+
+# Install PHP extensions
+COPY --from=ghcr.io/mlocati/php-extension-installer:latest /usr/bin/install-php-extensions /usr/local/bin/
+{{if .extensions}}
+RUN install-php-extensions {{join .extensions " "}}
+{{end}}
+
+# Serve {{.documentRoot}} on port 8080 with mod_rewrite
+ENV APACHE_DOCUMENT_ROOT={{.documentRoot}}
+RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf && \
+    sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf && \
+    sed -i 's/^Listen 80$/Listen 8080/' /etc/apache2/ports.conf && \
+    sed -i 's/<VirtualHost \*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf && \
+    a2enmod rewrite && \
+    mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+
+WORKDIR /var/www/html
+
+# Copy application code
+{{if .composer}}
+COPY --from=vendor --chown=www-data:www-data /app /var/www/html
+{{else}}
+COPY --chown=www-data:www-data . /var/www/html
+{{end}}
+{{if .assets}}
+COPY --from=assets --chown=www-data:www-data /app/public/build /var/www/html/public/build
+{{end}}
+
+{{env .env}}
+USER www-data
+
+EXPOSE {{.port}}
+CMD {{exec .cmd}}

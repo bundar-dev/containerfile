@@ -1,0 +1,22 @@
+ARG DOTNET_VERSION={{.versions.dotnet}}
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
+
+WORKDIR /src
+COPY . .
+RUN dotnet restore "{{.project}}"
+RUN dotnet publish "{{.project}}" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/{{.runtimeImage}}:${DOTNET_VERSION}
+
+WORKDIR /app
+COPY --from=build /app/publish .
+
+{{env .env}}
+{{if .appUser}}
+USER $APP_UID
+{{end}}
+{{if .port}}
+
+EXPOSE {{.port}}
+{{end}}
+CMD {{exec .cmd}}

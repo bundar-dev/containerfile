@@ -1,0 +1,77 @@
+{{if .bun}}
+# Adjust BUN_VERSION as desired
+ARG BUN_VERSION={{.versions.bun}}
+FROM docker.io/oven/bun:${BUN_VERSION}-slim AS base
+{{else}}
+# Adjust NODE_VERSION as desired
+ARG NODE_VERSION={{.versions.node}}
+FROM docker.io/library/node:${NODE_VERSION}-slim AS base
+{{end}}
+
+WORKDIR /app
+
+# Set production environment
+ENV NODE_ENV="production"
+{{if .pmSetup}}
+
+{{.pmSetup}}
+{{end}}
+
+# Throw-away build stage to reduce size of final image
+FROM base AS build
+
+# Install packages needed to build node modules
+{{apt .buildPackages}}
+
+# Install node modules
+{{if .workspaces}}
+COPY . .
+RUN {{.install}}
+{{else}}
+COPY {{join .packageFiles " "}} ./
+RUN {{.install}}
+{{if and .prisma .prismaDir}}
+
+# Generate Prisma Client
+COPY prisma ./prisma
+RUN {{.exec}} prisma generate
+{{end}}
+
+# Copy application code
+COPY . .
+{{end}}
+{{if .build}}
+
+# Build application
+RUN {{.build}}
+{{end}}
+{{if .prune}}
+
+# Remove development dependencies
+RUN {{.prune}}
+{{end}}
+
+{{if .staticDir}}
+# Final stage: serve the static build with nginx
+{{nginxStage "build" (printf "/app/%s" .staticDir)}}
+{{else}}
+# Final stage for app image
+FROM base
+{{if .prisma}}
+
+{{apt (list "openssl")}}
+{{end}}
+
+# Copy built application
+{{range .outputs}}
+COPY --from=build --chown={{$.user}}:{{$.user}} {{.From}} {{.To}}
+{{end}}
+
+USER {{.user}}
+
+{{env .env}}
+EXPOSE {{.port}}
+{{if .cmd}}
+CMD {{exec .cmd}}
+{{end}}
+{{end}}

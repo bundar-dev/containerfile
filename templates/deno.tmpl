@@ -1,0 +1,23 @@
+ARG DENO_VERSION={{.versions.deno}}
+FROM docker.io/denoland/deno:${DENO_VERSION}
+
+WORKDIR /app
+
+COPY . .
+{{if .entry}}
+RUN deno install --entrypoint {{.entry}}
+{{else}}
+RUN deno install
+{{end}}
+{{if .build}}
+RUN deno task build
+{{end}}
+RUN chown -R deno:deno /app
+
+{{env .env}}
+USER deno
+
+EXPOSE {{.port}}
+{{if .cmd}}
+CMD {{exec .cmd}}
+{{end}}
