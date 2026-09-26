@@ -12,7 +12,14 @@ RUN composer dump-autoload --optimize --no-dev --no-scripts
 {{if .assets}}
 
 # Build frontend assets
-FROM docker.io/library/node:lts-slim AS assets
+FROM docker.io/library/php:${PHP_VERSION}-cli AS assets
+COPY --from=docker.io/library/node:lts-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=docker.io/library/node:lts-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+{{if .extensions}}
+COPY --from=ghcr.io/mlocati/php-extension-installer:latest /usr/bin/install-php-extensions /usr/local/bin/
+RUN install-php-extensions {{join .extensions " "}}
+{{end}}
 WORKDIR /app
 COPY package*.json ./
 RUN {{.assetsInstall}}

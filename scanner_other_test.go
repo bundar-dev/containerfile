@@ -53,6 +53,9 @@ func TestLaravel(t *testing.T) {
 	assertEqual(t, r.Plan.Framework, "laravel")
 	assertEqual(t, r.Plan.Versions["php"], "8.2")
 	assertContains(t, r.Containerfile, "FROM docker.io/library/composer:2 AS vendor",
+		"FROM docker.io/library/php:${PHP_VERSION}-cli AS assets",
+		"COPY --from=docker.io/library/node:lts-slim /usr/local/bin/node /usr/local/bin/node",
+		"COPY --from=vendor /app/vendor ./vendor\nRUN npm run build",
 		"RUN install-php-extensions bcmath intl opcache pdo_mysql pdo_pgsql redis zip",
 		"APACHE_DOCUMENT_ROOT=/var/www/html/public", "COPY --from=assets --chown=www-data:www-data /app/public/build")
 }
