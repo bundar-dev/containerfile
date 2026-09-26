@@ -1,7 +1,9 @@
 package containerfile
 
 import (
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -91,8 +93,93 @@ func phpVersion(src *Source, require map[string]any) Version {
 		func() Version { return ToolVersion(src, "php") },
 		func() Version { return Version{jsonString(require, "php"), "composer.json"} },
 	)
-	if version := Extract(v.Value); version != "" {
-		return Version{Take(version, 2), v.Source}
+	version := Extract(v.Value)
+	if version == "" {
+		v = Default("8.4")
+		version = v.Value
 	}
-	return Default("8.4")
+	selected := phpMinorVersion(version)
+	packages, _ := src.ReadJSON("composer.lock")["packages"].([]any)
+	for _, entry := range packages {
+		pkg, _ := entry.(map[string]any)
+		requirement := jsonString(jsonMap(pkg, "require"), "php")
+		if needed, ok := phpRequiredMinor(requirement, selected); ok && needed > selected {
+			selected = needed
+			v.Source = "composer.lock"
+		}
+	}
+	if v.Source == "composer.lock" {
+		return Version{strconv.Itoa(selected/100) + "." + strconv.Itoa(selected%100), v.Source}
+	}
+	return Version{Take(version, 2), v.Source}
+}
+
+var phpConstraintRe = regexp.MustCompile(`^(>=|<=|>|<|\^|~|=)?(\d+)(?:\.(\d+|\*))?(?:\.(\d+|\*))?$`)
+
+func phpMinorVersion(version string) int {
+	parts := strings.Split(version, ".")
+	major, _ := strconv.Atoi(parts[0])
+	minor := 0
+	if len(parts) > 1 {
+		minor, _ = strconv.Atoi(parts[1])
+	}
+	return major*100 + minor
+}
+
+// phpRequiredMinor finds the lowest PHP minor at or above selected that
+// satisfies a lockfile constraint. The image tag selects the latest patch.
+func phpRequiredMinor(requirement string, selected int) (int, bool) {
+	best := 0
+	for _, alternative := range strings.Split(requirement, "|") {
+		candidate := selected
+		parts := strings.Fields(strings.ReplaceAll(alternative, ",", " "))
+		if len(parts) == 0 {
+			continue
+		}
+		valid := true
+		for _, part := range parts {
+			match := phpConstraintRe.FindStringSubmatch(part)
+			if match == nil {
+				valid = false
+				break
+			}
+			minimum := phpMinorVersion(match[2] + "." + match[3])
+			if match[1] != "<" && match[1] != "<=" && minimum > candidate {
+				candidate = minimum
+			}
+		}
+		if !valid {
+			continue
+		}
+		for _, part := range parts {
+			match := phpConstraintRe.FindStringSubmatch(part)
+			minimum := phpMinorVersion(match[2] + "." + match[3])
+			switch match[1] {
+			case "<":
+				valid = candidate < minimum
+			case "<=":
+				valid = candidate <= minimum
+			case "^":
+				valid = candidate < (minimum/100+1)*100
+			case "~":
+				if match[4] != "" {
+					valid = candidate < minimum+1
+				} else {
+					valid = candidate < (minimum/100+1)*100
+				}
+			case "", "=":
+				valid = match[3] == "" && candidate/100 == minimum/100 ||
+					match[3] == "*" && candidate/100 == minimum/100 ||
+					match[4] == "*" && candidate == minimum ||
+					match[3] != "" && match[3] != "*" && match[4] != "*" && candidate == minimum
+			}
+			if !valid {
+				break
+			}
+		}
+		if valid && (best == 0 || candidate < best) {
+			best = candidate
+		}
+	}
+	return best, best != 0
 }

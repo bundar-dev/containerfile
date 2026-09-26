@@ -60,6 +60,49 @@ func TestLaravel(t *testing.T) {
 		"APACHE_DOCUMENT_ROOT=/var/www/html/public", "COPY --from=assets --chown=www-data:www-data /app/public/build")
 }
 
+func TestPHPLockRequiresNewerRuntime(t *testing.T) {
+	r := generate(t, map[string]string{
+		"artisan":       "",
+		"composer.json": `{"require":{"php":"^8.3"}}`,
+		"composer.lock": `{"packages":[{"name":"symfony/console","require":{"php":">=8.4.1"}},` +
+			`{"name":"some/other","require":{"php":"^8.2"}}],` +
+			`"packages-dev":[{"name":"dev/tool","require":{"php":">=8.5"}}]}`,
+		"package.json": `{"scripts":{"build":"vite build"}}`,
+	})
+	assertEqual(t, r.Plan.Versions["php"], "8.4")
+	assertEqual(t, r.Plan.Sources["php"], "composer.lock")
+	assertContains(t, r.Containerfile, "ARG PHP_VERSION=8.4",
+		"FROM docker.io/library/php:${PHP_VERSION}-cli AS assets",
+		"FROM docker.io/library/php:${PHP_VERSION}-apache")
+
+	newer := generate(t, map[string]string{
+		"composer.json": `{"require":{"php":"^8.5"}}`,
+		"composer.lock": `{"packages":[{"require":{"php":">=8.4.1"}}]}`,
+	})
+	assertEqual(t, newer.Plan.Versions["php"], "8.5")
+
+	for _, constraint := range []string{"8.4.*", "~8.2.0 || ^8.4", ">=8.4.1 <9.0"} {
+		r := generate(t, map[string]string{
+			"composer.json": `{"require":{"php":"^8.3"}}`,
+			"composer.lock": `{"packages":[{"require":{"php":"` + constraint + `"}}]}`,
+		})
+		assertEqual(t, r.Plan.Versions["php"], "8.4")
+	}
+
+	majorOnly := generate(t, map[string]string{
+		"composer.json": `{"require":{"php":"^8"}}`,
+		"composer.lock": `{"packages":[{"require":{"php":">=8.0"}}]}`,
+	})
+	assertEqual(t, majorOnly.Plan.Versions["php"], "8")
+	assertEqual(t, generate(t, map[string]string{
+		".tool-versions": "php 8\n", "index.php": "",
+	}).Plan.Versions["php"], "8")
+	assertEqual(t, generate(t, map[string]string{
+		"composer.json": `{"require":{"php":"^8.3"}}`,
+		"composer.lock": `{"packages":[{"require":{"php":"~8.3.0 || ^8.4"}}]}`,
+	}).Plan.Versions["php"], "8.3")
+}
+
 func TestPlainPHP(t *testing.T) {
 	r := generate(t, map[string]string{"index.php": "<?php echo 1;"})
 	assertEqual(t, r.Plan.PackageManager, "")
